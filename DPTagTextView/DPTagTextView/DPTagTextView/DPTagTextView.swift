@@ -21,6 +21,7 @@ public struct DPTag {
 // MARK: - DPTagTextViewDelegate
 public protocol DPTagTextViewDelegate {
     func dpTagTextView(_ textView: DPTagTextView, didChangedTagSearchString strSearch: String, isHashTag: Bool)
+    func dpTagTextView(_ textView: DPTagTextView, inOutTagString strSearch: String, inOut: Bool, isHashTag: Bool)
     func dpTagTextView(_ textView: DPTagTextView, didInsertTag tag: DPTag)
     func dpTagTextView(_ textView: DPTagTextView, didRemoveTag tag: DPTag)
     func dpTagTextView(_ textView: DPTagTextView, didSelectTag tag: DPTag)
@@ -62,19 +63,19 @@ open class DPTagTextView: UITextView {
     open var mentionSymbol: String = "@"
     open var hashTagSymbol: String = "#"
     open var textViewAttributes: [NSAttributedString.Key: Any] = {
-        [NSAttributedString.Key.foregroundColor: UIColor.black,
+        [NSAttributedString.Key.foregroundColor: UIColor.white,
          NSAttributedString.Key.font: UIFont.systemFont(ofSize: 15)]
     }()
 
     open var mentionTagTextAttributes: [NSAttributedString.Key: Any] = {
-        [NSAttributedString.Key.foregroundColor: UIColor.blue,
-         NSAttributedString.Key.backgroundColor: UIColor.lightGray,
+        [NSAttributedString.Key.foregroundColor: UIColor.init(.bolt.textMentionBlue),
+         NSAttributedString.Key.backgroundColor: UIColor.clear,
          NSAttributedString.Key.font: UIFont.boldSystemFont(ofSize: 15)]
     }()
     
     open var hashTagTextAttributes: [NSAttributedString.Key: Any] = {
-        [NSAttributedString.Key.foregroundColor: UIColor.red,
-         NSAttributedString.Key.backgroundColor: UIColor.lightGray,
+        [NSAttributedString.Key.foregroundColor: UIColor.init(.bolt.textMentionBlue),
+         NSAttributedString.Key.backgroundColor: UIColor.clear,
          NSAttributedString.Key.font: UIFont.boldSystemFont(ofSize: 15)]
     }()
     
@@ -82,8 +83,8 @@ open class DPTagTextView: UITextView {
     open var dpTagDelegate : DPTagTextViewDelegate?
     open var allowsHashTagUsingSpace : Bool = true
     
-    private var currentTaggingRange: NSRange?
-    private var currentTaggingText: String? {
+    public var currentTaggingRange: NSRange?
+    public var currentTaggingText: String? {
         didSet {
             if let tag = currentTaggingText, tag != oldValue {
                 dpTagDelegate?.dpTagTextView(self, didChangedTagSearchString:tag, isHashTag: isHashTag)
@@ -91,18 +92,29 @@ open class DPTagTextView: UITextView {
         }
     }
     private var tagRegex: NSRegularExpression {
-        try! NSRegularExpression(pattern: "(\(mentionSymbol)|\(hashTagSymbol))([^\\s\\K]+)")
+        var pattern = ""
+        if isHashTag {
+            pattern = "(\(hashTagSymbol))([A-Za-z0-9_.-\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u017F\\u0391-\\u03CE\\u0400-\\u052F\\u0590-\\u06FF\\u0900-\\u09FF\\u1100-\\u11FF\\u30A0-\\u30FF\\u4E00-\\u9FFF]+)"
+        } else {
+            pattern = "(\(mentionSymbol))([a-zA-Z0-9_.-]+)"
+        }
+        return try! NSRegularExpression(pattern: pattern)
+//        try! NSRegularExpression(pattern: "(\(mentionSymbol)|\(hashTagSymbol))([^\\s\\K]+)")
     }
-    private var isHashTag = false
+    public var isHashTag = false
     private var tapGesture = UITapGestureRecognizer()
     
+    
+    public override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        setup()
+    }
     
     // MARK: - init
     required public init?(coder: NSCoder) {
         super.init(coder: coder)
         setup()
     }
-
 }
 
 // MARK: - Public methods
@@ -113,7 +125,7 @@ public extension DPTagTextView {
         guard let allText = (allText == nil ? text : allText) else { return }
         
         let origin = (allText as NSString).substring(with: range)
-        let tag = isHashTag ? hashTagSymbol.appending(tagText) : tagText
+        let tag = isHashTag ? hashTagSymbol.appending(tagText) : mentionSymbol.appending(tagText)
         let replace = isAppendSpace ? tag.appending(" ") : tag
         let changed = (allText as NSString).replacingCharacters(in: range, with: replace)
         let tagRange = NSMakeRange(range.location, tag.utf16.count)
@@ -155,6 +167,7 @@ public extension DPTagTextView {
         self.arrTags = arrTags
         updateAttributeText(selectedLocation: -1)
     }
+    
     /// This will remove all the previously cached tags. Always use this function to clear the textfields with actions
     func clearText() {
         self.text = ""
@@ -164,12 +177,13 @@ public extension DPTagTextView {
 
 
 // MARK: - Private methods
-private extension DPTagTextView {
+public extension DPTagTextView {
     
     func setup() {
         delegate = self
+        layoutManager.allowsNonContiguousLayout = false
     }
-    
+
     @objc final func tapOnTextView(_ recognizer: UITapGestureRecognizer) {
     
         guard let textView = recognizer.view as? UITextView else {
@@ -212,8 +226,55 @@ private extension DPTagTextView {
         return (matchedRange, matchedString)
     }
     
-    func tagging(textView: UITextView) {
+    func firsrtMatchString(_ string: String) -> String? {
+        let matched = tagRegex.matches(in: string, options: .reportCompletion, range: NSMakeRange(0, string.count))
+        if matched.count > 0, let range = matched.first?.range {
+            return (string as NSString).substring(with: range)
+        }
+        return nil
+    }
+    
+    func checkTagEdit(textView: UITextView) {
         let selectedLocation = textView.selectedRange.location
+        let taggingText = (textView.text as NSString).substring(with: NSMakeRange(0, selectedLocation))
+        let space: Character = " "
+        let lineBrak: Character = "\n"
+        var tagable: Bool = false
+        var characters: [Character] = []
+        var isHashTag = false
+        for char in Array(taggingText).reversed() {
+            if char == mentionSymbol.first {
+                characters.append(char)
+                isHashTag = false
+                tagable = true
+                break
+            } else if char == hashTagSymbol.first {
+                characters.append(char)
+                isHashTag = true
+                tagable = true
+                break
+            }
+            else if char == space || char == lineBrak {
+                tagable = false
+                break
+            }
+            characters.append(char)
+        }
+        
+        let data = matchedData(taggingCharacters: characters, selectedLocation: selectedLocation, taggingText: taggingText)
+        let tag = String(characters.reversed())
+        if  data.0 != nil {
+            dpTagDelegate?.dpTagTextView(self, inOutTagString: tag, inOut: true, isHashTag: isHashTag)
+        } else {
+            dpTagDelegate?.dpTagTextView(self, inOutTagString: tag, inOut: false, isHashTag: isHashTag)
+        }
+    }
+
+    func tagging(textView: UITextView) {
+        var selectedLocation = textView.selectedRange.location
+        if selectedLocation > textView.text.count {
+            selectedLocation = textView.text.count
+        }
         let taggingText = (textView.text as NSString).substring(with: NSMakeRange(0, selectedLocation))
         let space: Character = " "
         let lineBrak: Character = "\n"
@@ -251,8 +312,11 @@ private extension DPTagTextView {
     }
     
     func updateAttributeText(selectedLocation: Int) {
+        if self.marketText != nil { return}
+        let selectRange = selectedRange
         if text.isEmpty { arrTags.removeAll() }
         let attributedString = NSMutableAttributedString(string: text)
+        
         attributedString.addAttributes(textViewAttributes, range: NSMakeRange(0, text.utf16.count))
         arrTags.forEach { (dpTag) in
             guard let customTextAttributes = dpTag.customTextAttributes else {
@@ -261,25 +325,83 @@ private extension DPTagTextView {
             }
             attributedString.addAttributes(customTextAttributes, range: dpTag.range)
         }
-        
+                
+        let contentOffset = self.contentOffset
         attributedText = attributedString
         if selectedLocation > 0 { selectedRange = NSMakeRange(selectedLocation, 0) }
+        self.contentOffset = contentOffset
     }
     
-    func updateArrTags(range: NSRange, textCount: Int) {
-        arrTags = arrTags.filter({ (dpTag) -> Bool in
-            if dpTag.range.location < range.location && range.location < dpTag.range.location+dpTag.range.length {
-                dpTagDelegate?.dpTagTextView(self, didRemoveTag: dpTag)
-                return false
+    var marketText: String? {
+        if let marketRange = self.markedTextRange {
+            return self.text(in: marketRange)
+        }
+        return nil
+    }
+    
+    func fixedWhenMarketTextUnmatch() {
+        var matched: [DPTag] = []
+        for i in 0 ..< arrTags.count {
+            var tag = arrTags[i]
+            if let last = matched.last(where: { t in
+                return t.name == tag.name
+            }) {
+                let text = (self.text as NSString).substring(from: last.range.location + last.range.length)
+                let range = (text as NSString).range(of: tag.name)
+                if range.length > 0 {
+                    tag.range = NSRange(location: range.location + last.range.location + last.range.length, length: range.length)
+                } else {
+                    tag.range = NSRange(location: 0, length: 0)
+                }
+                arrTags[i] = tag
+                matched.append(tag)
+            } else {
+                let range = (self.text as NSString).range(of: tag.name)
+                if range.length > 0 {
+                    tag.range = range
+                } else {
+                    tag.range = NSRange(location: 0, length: 0)
+                }
+                arrTags[i] = tag
+                matched.append(tag)
             }
-            if range.length > 0 {
-                if range.location <= dpTag.range.location && dpTag.range.location < range.location+range.length {
+            
+
+        }
+        if self.marketText != nil {
+            updateTypingAttributes()
+        }
+    }
+    
+    func updateTypingAttributes() {
+        var attri = textViewAttributes
+        attri[.backgroundColor] = UIColor.black.withAlphaComponent(0.1)
+        self.typingAttributes = attri
+    }
+    
+    func updateArrTags(range: NSRange, textCount: Int, text: String) {
+        let oldCount = arrTags.count
+        var didUpdateRange = false
+        
+        var marketText = self.marketText ?? ""
+       
+        if marketText.isEmpty == false {
+            updateTypingAttributes()
+        } else {
+            arrTags = arrTags.filter({ (dpTag) -> Bool in
+                if dpTag.range.location < range.location && range.location < dpTag.range.location+dpTag.range.length {
                     dpTagDelegate?.dpTagTextView(self, didRemoveTag: dpTag)
                     return false
                 }
-            }
-            return true
-        })
+                if range.length > 0 {
+                    if range.location <= dpTag.range.location && dpTag.range.location < range.location+range.length {
+                        dpTagDelegate?.dpTagTextView(self, didRemoveTag: dpTag)
+                        return false
+                    }
+                }
+                return true
+            })
+        }
         
         for i in 0 ..< arrTags.count {
             var location = arrTags[i].range.location
@@ -295,6 +417,7 @@ private extension DPTagTextView {
                     location += textCount
                 }
                 arrTags[i].range = NSMakeRange(location, length)
+                didUpdateRange = true
             }
         }
         
@@ -302,15 +425,18 @@ private extension DPTagTextView {
         dpTagDelegate?.dpTagTextView(self, didChangedTags: arrTags)
     }
     
-    func addHashTagWithSpace(_ replacementText: String, _ range: NSRange) {
-        if isHashTag && replacementText == " " && allowsHashTagUsingSpace {
+    func addHashTagWithSpace(_ replacementText: String, _ range: NSRange) -> Bool {
+        if isHashTag && (replacementText == " " || replacementText == "\n") && allowsHashTagUsingSpace {
             let selectedLocation = selectedRange.location
             let newText = (text as NSString).replacingCharacters(in: range, with: replacementText)
             let taggingText = (newText as NSString).substring(with: NSMakeRange(0, selectedLocation + 1))
-            if let tag = taggingText.sliceMultipleTimes(from: "#", to: " ").last {
-                addTag(allText: newText, tagText: tag, isAppendSpace: false)
+            if let tag = taggingText.sliceMultipleTimes(from: "#", to: replacementText).last,
+               tag.trimmingCharacters(in: .whitespacesAndNewlines).count > 0 {
+                addTag(allText: text, tagText: "#" + tag, isAppendSpace: true)
+                return true
             }
         }
+        return false
     }
     
 }
@@ -326,12 +452,22 @@ extension DPTagTextView: UITextViewDelegate {
     
     public func textViewDidChangeSelection(_ textView: UITextView) {
         tagging(textView: textView)
+        fixedWhenMarketTextUnmatch()
+        checkTagEdit(textView: textView)
         dpTagDelegate?.textViewDidChangeSelection(self)
     }
     
     public func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-        addHashTagWithSpace(text, range)
-        updateArrTags(range: range, textCount: text.utf16.count)
+        if let currentTaggingText = currentTaggingText, text == hashTagSymbol {
+            addHashTagWithSpace(" ", range)
+            updateArrTags(range: range, textCount: 1, text: text)
+            return true
+        }
+        if addHashTagWithSpace(text, range) && text != "\n" {
+            updateArrTags(range: range, textCount: text.utf16.count, text: text)
+            return false
+        }
+        updateArrTags(range: range, textCount: text.utf16.count, text: text)
         return dpTagDelegate?.textView(self, shouldChangeTextIn: range, replacementText: text) ?? true
     }
     
@@ -348,6 +484,19 @@ extension DPTagTextView: UITextViewDelegate {
     }
     
     public func textViewDidEndEditing(_ textView: UITextView) {
+        // After finishing editing, determine whether to actively add the tag being edited
+        if let currentTaggingText = currentTaggingText, (currentTaggingText as NSString).contains(hashTagSymbol), let tagRange = self.currentTaggingRange {
+            // Consistent with the previous tag, no need to add
+            var ignoreTag = false
+            self.arrTags.forEach { tag in
+                if tag.range == tagRange {
+                    ignoreTag = true
+                }
+            }
+            if ignoreTag == false {
+                self.addTag(tagText: currentTaggingText, isAppendSpace: true)
+            }
+        }
         dpTagDelegate?.textViewDidEndEditing(self)
     }
     
@@ -378,4 +527,3 @@ internal extension String {
         }
     }
 }
-
